@@ -1,4 +1,4 @@
-FROM docker.io/library/node:25.8.1-alpine3.23 AS build
+FROM docker.io/library/node:lts-alpine AS build
 
 WORKDIR /srv/web
 
@@ -16,7 +16,7 @@ COPY src src
 RUN npm run build
 
 
-FROM docker.io/library/nginx:1.29.6-alpine3.23
+FROM docker.io/library/nginx:stable-alpine
 
 COPY --from=build /srv/web/build /var/www/html/default
 

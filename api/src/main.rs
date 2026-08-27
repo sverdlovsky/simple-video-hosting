@@ -8,8 +8,6 @@ use axum::{
     routing::{get, post},
     serve,
 };
-use axum_extra::extract::CookieJar;
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, errors::ErrorKind};
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use std::{
@@ -25,52 +23,6 @@ use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use socket2::{Domain, Socket, Type};
 
-pub enum AuthError {
-    MissingToken,
-    ExpiredToken,
-    InvalidToken,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Claims {
-    pub sub: String,
-    //pub exp: usize,
-}
-
-pub struct Auth {
-    decoding_key: DecodingKey,
-}
-
-impl Auth {
-    pub fn new() -> anyhow::Result<Self> {
-        let jwt_secret =
-            env::var("JWT_SECRET").context("Environment variable JWT_SECRET not set!")?;
-
-        Ok(Self {
-            decoding_key: DecodingKey::from_secret(jwt_secret.as_bytes()),
-        })
-    }
-
-    pub fn validate(&self, jar: &CookieJar) -> Result<String, AuthError> {
-        let token = match jar.get("access_token") {
-            Some(c) => c.value().to_string(),
-            None => return Err(AuthError::MissingToken),
-        };
-
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.validate_exp = true;
-
-        let token_data = match decode::<Claims>(&token, &self.decoding_key, &validation) {
-            Ok(data) => data,
-            Err(err) => match *err.kind() {
-                ErrorKind::ExpiredSignature => return Err(AuthError::ExpiredToken),
-                _ => return Err(AuthError::InvalidToken),
-            },
-        };
-
-        Ok(token_data.claims.sub)
-    }
-}
 
 #[derive(Clone)]
 struct AppState {
@@ -213,48 +165,52 @@ async fn ready() -> StatusCode {
 }
 
 async fn videos(
-    jar: CookieJar,
+    headers: HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
     Query(params): Query<QueryParams>,
 ) -> impl IntoResponse {
-    let email = match state.auth.validate(&jar) {
-        Ok(email) => email,
-        Err(_) => {
-            return (StatusCode::OK, Json(Vec::<serde_json::Value>::new())).into_response();
+    let email = match headers.get("x-user-email") {
+        Some(email) => match email.to_str().unwrap().to_owned();
+        None => {
+            return (StatusCode::UNAUTHORIZED).into_response();
         }
     };
 
-    let row: (serde_json::Value,) =
-        match sqlx::query_as("SELECT get_user_videos($1, $2, $3, $4, $5, $6, $7, $8);")
-            .bind(&email)
-            .bind(&params.limit)
-            .bind(&params.search)
-            .bind(&params.kind)
-            .bind(&params.tag)
-            .bind(&params.user)
-            .bind(&params.app)
-            .bind(&params.random)
-            .fetch_one(&state.db)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("DB error: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
-            }
-        };
+    let row: (serde_json::Value,) = match sqlx::query_as(
+        "SELECT get_user_videos($1, $2, $3, $4, $5, $6, $7, $8);"
+    )
+        .bind(&email)
+        .bind(&params.limit)
+        .bind(&params.search)
+        .bind(&params.kind)
+        .bind(&params.tag)
+        .bind(&params.user)
+        .bind(&params.app)
+        .bind(&params.random)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("DB error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "db error",
+            ).into_response();
+        }
+    };
 
     (StatusCode::OK, Json(row.0)).into_response()
 }
 
 async fn get_video(
-    jar: CookieJar,
+    headers: HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    let email = match state.auth.validate(&jar) {
-        Ok(email) => email,
-        Err(_) => {
+    let email = match headers.get("x-user-email") {
+        Some(email) => match email.to_str().unwrap().to_owned();
+        None => {
             return (StatusCode::UNAUTHORIZED).into_response();
         }
     };

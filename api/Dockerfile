@@ -1,4 +1,4 @@
-FROM docker.io/library/rust:1.94.0-alpine3.23 AS build
+FROM docker.io/library/rust:alpine AS build
 
 RUN apk add \
     openssl-dev \
@@ -24,15 +24,13 @@ COPY src src
 RUN cargo build --release
 
 
-FROM docker.io/library/alpine:3.23
+FROM scratch
 
-COPY --from=build /srv/api/target/release/svh /usr/bin/svh
+COPY --from=build /srv/api/target/release/svh /svh
 
-RUN addgroup -g 31541 user
-RUN adduser -DH -u 31541 -G user user
-USER user
+USER 10001:10001
 
 EXPOSE 8080
 
-ENTRYPOINT [ "/usr/bin/svh" ]
+ENTRYPOINT [ "/svh" ]
 
