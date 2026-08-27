@@ -1,0 +1,199 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: svh
+  labels:
+    type: local
+    app: svh
+spec:
+  storageClassName: manual
+  hostPath:
+    path: "/var/lib/rancher/k8s/storage/svh"
+  accessModes:
+    - ReadWriteOnce
+  capacity:
+    storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: svh
+  labels:
+    app: svh
+spec:
+  storageClassName: manual
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svh
+  template:
+    metadata:
+      labels:
+        app: svh
+    spec:
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      containers:
+      - name: web
+        image: ghcr.io/sverdlovsky/svh-web:latest
+        ports:
+        - name: web
+          containerPort: 80
+        volumeMounts:
+        - name: svh
+          mountPath: /var/www/html/media
+        env:
+        - name: NGINX_HOST
+          value: example.com
+      - name: api
+        image: ghcr.io/sverdlovsky/svh-api:latest
+        ports:
+        - name: api
+          containerPort: 8080
+        env:
+        - name: DOMAIN
+          value: example.com
+        - name: ADMIN_EMAIL
+          value: admin@gmail.com
+        - name: DATABASE_URL
+          value: postgresql://svh_user:svh_pass@postgres:5432/svh_db
+        - name: JWT_SECRET
+          value:
+      - name: auth
+        image: ghcr.io/sverdlovsky/yet-another-auth-endpoint:latest
+        ports:
+        - name: auth
+          containerPort: 8008
+        env:
+        - name: DOMAIN
+          value: example.com
+        - name: DATABASE_URL
+          value: postgresql://svh_user:svh_pass@postgres:5432/svh_db
+        - name: GOOGLE_CLIENT_ID
+          value:
+        - name: GOOGLE_CLIENT_SECRET
+          value:
+        - name: YANDEX_CLIENT_ID
+          value:
+        - name: YANDEX_CLIENT_SECRET
+          value:
+        - name: GITHUB_CLIENT_ID
+          value:
+        - name: GITHUB_CLIENT_SECRET
+          value:
+        - name: SECRET_KEY
+          value:
+        - name: JWT_SECRET
+          value:
+      volumes:
+      - name: svh
+        persistentVolumeClaim:
+          claimName: svh
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svh
+  labels:
+    app: svh
+spec:
+  type: ClusterIP
+  selector:
+    app: svh
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+    - name: auth
+      port: 8008
+      targetPort: 8008
+      protocol: TCP
+    - name: api
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: svh
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls.certresolver: default
+spec:
+  ingressClassName: traefik
+  tls:
+  - hosts:
+    - example.com
+    - media.example.com
+    - api.example.com
+    - auth.example.com
+  rules:
+  - host: example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svh
+            port:
+              name: http
+
+  - host: media.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svh
+            port:
+              name: http
+
+      - path: /video
+        pathType: Prefix
+        backend:
+          service:
+            name: svh
+            port:
+              name: api
+
+  - host: api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svh
+            port:
+              name: api
+
+  - host: auth.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svh
+            port:
+              name: auth
+

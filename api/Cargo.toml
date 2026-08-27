@@ -1,13 +1,12 @@
 [package]
-name = "simple-video-hosting"
-version = "0.0.5"
+name = "svh"
+version = "1.0.0"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
 axum = "0.8.4"
-axum-extra = { version = "0.10.1", features = ["cookie"] }
-jsonwebtoken = "9.3.1"
+axum-extra = { version = "0.10.1" }
 num_cpus = "1.17.0"
 serde = { version = "1.0.225", features = ["derive"] }
 serde_json = "1.0.145"
@@ -15,3 +14,7 @@ sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-native-tls"] 
 tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
+openssl = { version="0.10", features = ["vendored"] }
+tower-http = { version = "0.6.8", features = ["cors"] }
+socket2 = "0.6.5"
+
