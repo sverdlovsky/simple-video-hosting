@@ -27,7 +27,6 @@ use socket2::{Domain, Socket, Type};
 #[derive(Clone)]
 struct AppState {
     db: sqlx::Pool<sqlx::Postgres>,
-    auth: Arc<Auth>,
 }
 
 #[derive(Deserialize)]
@@ -56,7 +55,6 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         db: pool,
-        auth: Arc::new(Auth::new()?),
     };
 
     let cors = CorsLayer::new()
@@ -170,7 +168,7 @@ async fn videos(
     Query(params): Query<QueryParams>,
 ) -> impl IntoResponse {
     let email = match headers.get("x-user-email") {
-        Some(email) => match email.to_str().unwrap().to_owned();
+        Some(email) => email.to_str().unwrap().to_owned(),
         None => {
             return (StatusCode::UNAUTHORIZED).into_response();
         }
@@ -209,7 +207,7 @@ async fn get_video(
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
     let email = match headers.get("x-user-email") {
-        Some(email) => match email.to_str().unwrap().to_owned();
+        Some(email) => email.to_str().unwrap().to_owned(),
         None => {
             return (StatusCode::UNAUTHORIZED).into_response();
         }
