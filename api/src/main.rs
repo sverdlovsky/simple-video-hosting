@@ -282,16 +282,21 @@ async fn get_video(
         return (StatusCode::BAD_REQUEST, "Invalid quality").into_response();
     }
 
+    let video_id: i16 = match video_id.parse() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid video id").into_response(),
+    };
+
     let has_access: (bool,) = match sqlx::query_as(
         "SELECT EXISTS (
             SELECT 1
             FROM Video_User_Links up
             JOIN Users u ON u.id = up.uid
-            WHERE u.email = $1 AND up.vid = $2::uuid
+            WHERE u.email = $1 AND up.vid = $2
         )",
     )
     .bind(&email)
-    .bind(&video_id)
+    .bind(video_id)
     .fetch_one(&state.db)
     .await
     {
