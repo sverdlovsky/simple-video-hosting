@@ -19,7 +19,10 @@
     error = null;
     videoUrl = null;
 
-    fetch(`https://api.${domain}/video/${id}/orig`)
+    fetch(`https://api.${domain}/video/${id}/orig`, {
+      method: "GET",
+      credentials: "include",
+    })
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to fetch video: ${res.status}`);
         return res.json();
