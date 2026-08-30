@@ -16,7 +16,7 @@ use axum::{
 };
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::presigning::PresigningConfig;
-use serde::Deserialize;
+use serde::{Deserialize, json};
 use socket2::{Domain, Socket, Type};
 use sqlx::postgres::PgPoolOptions;
 use std::{
@@ -307,7 +307,7 @@ async fn get_video(
 
     let object_key = format!("video/{}/{}.mp4", video_id, quality);
 
-    let presigning_config = match PresigningConfig::expires_in(StdDuration::from_secs(120)) {
+    let presigning_config = match PresigningConfig::expires_in(state.download_ttl) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Presigning config error: {}", e);
