@@ -16,7 +16,8 @@ use axum::{
 };
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::presigning::PresigningConfig;
-use serde::{Deserialize, json};
+use serde::Deserialize;
+use serde_json::json;
 use socket2::{Domain, Socket, Type};
 use sqlx::postgres::PgPoolOptions;
 use std::{
