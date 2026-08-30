@@ -15,7 +15,7 @@ CREATE TABLE Videos (
     id SMALLSERIAL PRIMARY KEY,
     kind SMALLINT DEFAULT 0,
     access SMALLINT DEFAULT 0,
-    title TEXT NOT NULL,
+    title TEXT,
     description TEXT,
     cat TIMESTAMP DEFAULT now()
 );
@@ -111,12 +111,12 @@ BEGIN
             '[]'::json
         ) FROM (
             SELECT v.cat, json_build_object(
-                'id', to_hex(v.id::integer),
+                'id', v.id,
                 'title', v.title,
                 'tags', (
                     SELECT json_agg(
                         json_build_object(
-                            'id', to_hex(t.id::integer),
+                            'id', t.id,
                             'title', t.title,
                             'color', t.color
                         )
@@ -128,7 +128,7 @@ BEGIN
                 'users', (
                     SELECT json_agg(
                         json_build_object(
-                            'id', to_hex(u.id),
+                            'id', u.id,
                             'email', u.email,
                             'name', u.name,
                             'role', r.title
@@ -142,7 +142,7 @@ BEGIN
                 'apps', (
                     SELECT json_agg(
                         json_build_object(
-                            'id', to_hex(a.id::integer),
+                            'id', a.id,
                             'title', a.title
                         )
                     )
@@ -199,19 +199,19 @@ RETURNS jsonb AS $$
 BEGIN
     SELECT jsonb_build_object(
         'users', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(u.id), 'name', u.name))
+            SELECT jsonb_agg(jsonb_build_object('id', u.id, 'name', u.name))
             FROM Users u
         ),
         'roles', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(r.id::integer), 'title', r.title))
+            SELECT jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title))
             FROM Roles r
         ),
         'apps', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(a.id::integer), 'title', a.title))
+            SELECT jsonb_agg(jsonb_build_object('id', a.id, 'title', a.title))
             FROM Apps a
         ),
         'tags', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(t.id::integer), 'title', t.title))
+            SELECT jsonb_agg(jsonb_build_object('id', t.id, 'title', t.title))
             FROM Tags t
         )
     );
@@ -225,17 +225,17 @@ BEGIN
         'title', v.title,
         'description', v.description,
         'users', COALESCE((
-            SELECT jsonb_agg(jsonb_build_object('uid', to_hex(up.uid), 'rid', to_hex(up.rid::integer)))
+            SELECT jsonb_agg(jsonb_build_object('uid', up.uid, 'rid', up.rid))
             FROM Video_User_Links up
             WHERE up.vid = p_vid
         ), '[]'::jsonb),
         'apps', COALESCE((
-            SELECT jsonb_agg(to_hex(ap.aid::integer))
+            SELECT jsonb_agg(ap.aid)
             FROM Video_App_Links ap
             WHERE ap.vid = p_vid
         ), '[]'::jsonb),
         'tags', COALESCE((
-            SELECT jsonb_agg(to_hex(tp.tid::integer))
+            SELECT jsonb_agg(tp.tid)
             FROM Video_Tag_Links tp
             WHERE tp.vid = p_vid
         ), '[]'::jsonb)

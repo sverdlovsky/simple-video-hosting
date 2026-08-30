@@ -14,7 +14,10 @@ use axum::{
     routing::{get, post},
     serve,
 };
+use aws_sdk_s3::config::Credentials;
+use aws_sdk_s3::presigning::PresigningConfig;
 use serde::Deserialize;
+use socket2::{Domain, Socket, Type};
 use sqlx::postgres::PgPoolOptions;
 use std::{
     net::{
@@ -27,12 +30,16 @@ use std::{
 };
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
-use socket2::{Domain, Socket, Type};
 
 
 #[derive(Clone)]
 struct AppState {
     db: sqlx::Pool<sqlx::Postgres>,
+    s3: aws_sdk_s3::Client,
+    s3_bucket: String,
+    public_upload: bool,
+    download_ttl: Duration,
+    upload_ttl: Duration,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +51,12 @@ struct QueryParams {
     user: Option<i32>,
     app: Option<i32>,
     random: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+struct PostVideoPayload {
+    title: String,
+    description: Option<String>,
 }
 
 #[tokio::main]
@@ -59,8 +72,52 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to connect to Postgres")?;
 
+    let s3_endpoint = env::var("S3_ENDPOINT").context("Environment variable S3_ENDPOINT is not set!")?;
+    let s3_region = env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+    let s3_access_key = env::var("S3_ACCESS_KEY").context("Environment variable S3_ACCESS_KEY is not set!")?;
+    let s3_secret_key = env::var("S3_SECRET_KEY").context("Environment variable S3_SECRET_KEY is not set!")?;
+    let s3_bucket = env::var("S3_PUBLIC_BUCKET").unwrap_or_else(|_| "svh".to_string());
+
+    let public_upload = env::var("PUBLIC_UPLOAD")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .context("Environment variable PUBLIC_UPLOAD must be true or false")?;
+
+    let download_ttl = env::var("DOWNLOAD_TTL")
+        .unwrap_or_else(|_| "120".to_string())
+        .parse::<u64>()
+        .context("Environment variable DOWNLOAD_TTL must be a number of seconds")?;
+
+    let upload_ttl = env::var("UPLOAD_TTL")
+        .unwrap_or_else(|_| "300".to_string())
+        .parse::<u64>()
+        .context("Environment variable UPLOAD_TTL must be a number of seconds")?;
+
+    let s3_credentials = Credentials::new(
+        s3_access_key,
+        s3_secret_key,
+        None,
+        None,
+        "static",
+    );
+
+    let s3_config = aws_sdk_s3::Config::builder()
+        .endpoint_url(s3_endpoint)
+        .region(aws_sdk_s3::config::Region::new(s3_region))
+        .credentials_provider(s3_credentials)
+        .force_path_style(true)
+        .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+        .build();
+
+    let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
+
     let state = AppState {
         db: pool,
+        s3: s3_client,
+        s3_bucket,
+        public_upload,
+        download_ttl: Duration::from_secs(download_ttl),
+        upload_ttl: Duration::from_secs(upload_ttl),
     };
 
     let cors = CorsLayer::new()
@@ -79,8 +136,9 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .route("/videos", get(videos))
-        .route("/video/get/{filename}", get(get_video))
+        .route("/video", get(videos))
+        .route("/video/{video_id}/{quality}", get(get_video))
+        .route("/video", post(post_video))
         .layer(Extension(Arc::new(state)))
         .layer(cors);
 
@@ -210,7 +268,7 @@ async fn videos(
 async fn get_video(
     headers: HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
-    Path(filename): Path<String>,
+    Path((video_id, quality)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let email = match headers.get("x-user-email") {
         Some(email) => email.to_str().unwrap().to_owned(),
@@ -219,7 +277,9 @@ async fn get_video(
         }
     };
 
-    let uuid_str = filename.strip_suffix(".mp4").unwrap_or(&filename);
+    if !matches!(quality.as_str(), "orig" | "high" | "low") {
+        return (StatusCode::BAD_REQUEST, "Invalid quality").into_response();
+    }
 
     let has_access: (bool,) = match sqlx::query_as(
         "SELECT EXISTS (
@@ -230,7 +290,7 @@ async fn get_video(
         )",
     )
     .bind(&email)
-    .bind(uuid_str)
+    .bind(&video_id)
     .fetch_one(&state.db)
     .await
     {
@@ -245,15 +305,113 @@ async fn get_video(
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
-    let internal_path = format!("/videos/{}", filename);
+    let object_key = format!("video/{}/{}.mp4", video_id, quality);
 
-    let mut response = Response::new(Body::empty());
-    response
-        .headers_mut()
-        .insert("X-Accel-Redirect", internal_path.parse().unwrap());
-    response
-        .headers_mut()
-        .insert("Content-Type", "video/mp4".parse().unwrap());
+    let presigning_config = match PresigningConfig::expires_in(StdDuration::from_secs(120)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Presigning config error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "S3 error").into_response();
+        }
+    };
 
-    response
+    let presigned_request = match state
+        .s3
+        .get_object()
+        .bucket(&state.s3_bucket)
+        .key(&object_key)
+        .presigned(presigning_config)
+        .await
+    {
+        Ok(req) => req,
+        Err(e) => {
+            eprintln!("S3 presign error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "S3 error").into_response();
+        }
+    };
+
+    let full_uri = presigned_request.uri();
+    let public_url = full_uri.replacen("/svh/", "/", 1);
+
+    (StatusCode::OK, Json(json!({ "url": public_url }))).into_response()
 }
+
+async fn post_video(
+    headers: HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<PostVideoPayload>,
+) -> impl IntoResponse {
+    let email = match headers.get("x-user-email") {
+        Some(email) => email.to_str().unwrap().to_owned(),
+        None => {
+            return (StatusCode::UNAUTHORIZED).into_response();
+        }
+    };
+
+    if !state.public_upload {
+        let can_upload: (bool,) = match sqlx::query_as(
+            "SELECT upload FROM Users WHERE email = $1",
+        )
+        .bind(&email)
+        .fetch_one(&state.db)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("DB error: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "DB error").into_response();
+            }
+        };
+
+        if !can_upload.0 {
+            return (StatusCode::FORBIDDEN, "Upload not allowed").into_response();
+        }
+    }
+
+    let video_id: (i16,) = match sqlx::query_as(
+        "INSERT INTO Videos (title, description) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(&payload.title)
+    .bind(&payload.description)
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("DB error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "DB error").into_response();
+        }
+    };
+
+    let object_key = format!("video/{}/orig.mp4", video_id.0);
+
+    let presigning_config = match PresigningConfig::expires_in(state.upload_ttl) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Presigning config error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "S3 error").into_response();
+        }
+    };
+
+    let presigned_request = match state
+        .s3
+        .put_object()
+        .bucket(&state.s3_bucket)
+        .key(&object_key)
+        .content_type("video/mp4")
+        .presigned(presigning_config)
+        .await
+    {
+        Ok(req) => req,
+        Err(e) => {
+            eprintln!("S3 presign error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "S3 error").into_response();
+        }
+    };
+
+    let full_uri = presigned_request.uri();
+    let public_url = full_uri.replacen("/svh/", "/", 1);
+
+    (StatusCode::OK, Json(json!({ "id": video_id.0, "upload_url": public_url }))).into_response()
+}
+

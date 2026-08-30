@@ -5,6 +5,35 @@
   let domain = window.location.hostname;
 
   let id = $derived(page.url.searchParams.get("v"));
+  let videoUrl = $state<string | null>(null);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+
+  $effect(() => {
+    if (!id) {
+      videoUrl = null;
+      return;
+    }
+
+    loading = true;
+    error = null;
+    videoUrl = null;
+
+    fetch(`https://${domain}/api/video/${id}/orig`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to fetch video: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        videoUrl = data.url;
+      })
+      .catch((e) => {
+        error = e.message;
+      })
+      .finally(() => {
+        loading = false;
+      });
+  });
 
   function vDel() {
     let url = page.url;
@@ -15,13 +44,16 @@
 
 {#if id}
   <button onclick={() => vDel()}>
-    <video controls autoplay>
-      <source
-        src={`https://media.${domain}/video/${id}.mp4`}
-        type="video/mp4"
-      />
-      <track kind="captions" />
-    </video>
+    {#if loading}
+      <p>Загрузка...</p>
+    {:else if error}
+      <p>Ошибка: {error}</p>
+    {:else if videoUrl}
+      <video controls autoplay>
+        <source src={videoUrl} type="video/mp4" />
+        <track kind="captions" />
+      </video>
+    {/if}
   </button>
 {/if}
 
