@@ -3,6 +3,8 @@ CREATE USER svh_user WITH PASSWORD 'SET_YOUR_PASSWORD';
 ALTER DATABASE svh_db OWNER TO svh_user;
 
 
+CREATE TYPE vid_obj_type AS ENUM ('preview', 'orig', 'high', 'low');
+
 CREATE TABLE Users (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL,
@@ -15,9 +17,23 @@ CREATE TABLE Videos (
     id SMALLSERIAL PRIMARY KEY,
     kind SMALLINT DEFAULT 0,
     access SMALLINT DEFAULT 0,
-    title TEXT NOT NULL,
+    title TEXT,
     description TEXT,
     cat TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE Video_Objects (
+    vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
+    type vid_obj_type NOT NULL,
+    cat TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (vid, type)
+);
+
+CREATE TABLE Transcribe_Jobs (
+    vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
+    type vid_obj_type NOT NULL,
+    cat TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (vid, type)
 );
 
 CREATE TABLE Roles (
@@ -111,12 +127,12 @@ BEGIN
             '[]'::json
         ) FROM (
             SELECT v.cat, json_build_object(
-                'id', to_hex(v.id::integer),
+                'id', v.id,
                 'title', v.title,
                 'tags', (
                     SELECT json_agg(
                         json_build_object(
-                            'id', to_hex(t.id::integer),
+                            'id', t.id,
                             'title', t.title,
                             'color', t.color
                         )
@@ -128,7 +144,7 @@ BEGIN
                 'users', (
                     SELECT json_agg(
                         json_build_object(
-                            'id', to_hex(u.id),
+                            'id', u.id,
                             'email', u.email,
                             'name', u.name,
                             'role', r.title
@@ -142,7 +158,7 @@ BEGIN
                 'apps', (
                     SELECT json_agg(
                         json_build_object(
-                            'id', to_hex(a.id::integer),
+                            'id', a.id,
                             'title', a.title
                         )
                     )
@@ -194,24 +210,24 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
-CREATE OR REPLACE FUNCTION Video.get_meta()
+CREATE OR REPLACE FUNCTION get_meta()
 RETURNS jsonb AS $$
 BEGIN
     SELECT jsonb_build_object(
         'users', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(u.id), 'name', u.name))
+            SELECT jsonb_agg(jsonb_build_object('id', u.id, 'name', u.name))
             FROM Users u
         ),
         'roles', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(r.id::integer), 'title', r.title))
+            SELECT jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title))
             FROM Roles r
         ),
         'apps', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(a.id::integer), 'title', a.title))
+            SELECT jsonb_agg(jsonb_build_object('id', a.id, 'title', a.title))
             FROM Apps a
         ),
         'tags', (
-            SELECT jsonb_agg(jsonb_build_object('id', to_hex(t.id::integer), 'title', t.title))
+            SELECT jsonb_agg(jsonb_build_object('id', t.id, 'title', t.title))
             FROM Tags t
         )
     );
@@ -225,17 +241,17 @@ BEGIN
         'title', v.title,
         'description', v.description,
         'users', COALESCE((
-            SELECT jsonb_agg(jsonb_build_object('uid', to_hex(up.uid), 'rid', to_hex(up.rid::integer)))
+            SELECT jsonb_agg(jsonb_build_object('uid', up.uid, 'rid', up.rid))
             FROM Video_User_Links up
             WHERE up.vid = p_vid
         ), '[]'::jsonb),
         'apps', COALESCE((
-            SELECT jsonb_agg(to_hex(ap.aid::integer))
+            SELECT jsonb_agg(ap.aid)
             FROM Video_App_Links ap
             WHERE ap.vid = p_vid
         ), '[]'::jsonb),
         'tags', COALESCE((
-            SELECT jsonb_agg(to_hex(tp.tid::integer))
+            SELECT jsonb_agg(tp.tid)
             FROM Video_Tag_Links tp
             WHERE tp.vid = p_vid
         ), '[]'::jsonb)
@@ -244,4 +260,55 @@ BEGIN
     WHERE v.id = p_vid;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION get_trn_job()
+RETURNS TABLE (job_vid SMALLINT, job_type vid_obj_type) AS $$
+DECLARE
+    job_row RECORD;
+BEGIN
+    SELECT v.id AS vid, t.type
+    INTO job_row
+    FROM Videos v
+    CROSS JOIN unnest(enum_range(NULL::vid_obj_type)) AS t(type)
+    WHERE t.type != 'orig'
+      AND NOT EXISTS (
+          SELECT 1 FROM Video_Objects vo
+          WHERE vo.vid = v.id AND vo.type = t.type
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM Transcribe_Jobs tj
+          WHERE tj.vid = v.id AND tj.type = t.type
+      )
+    ORDER BY v.cat
+    LIMIT 1;
+
+    IF job_row IS NULL THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO Transcribe_Jobs (vid, type)
+    VALUES (job_row.vid, job_row.type)
+    ON CONFLICT (vid, type) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    job_vid := job_row.vid;
+    job_type := job_row.type;
+    RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION complete_trn_job(p_vid SMALLINT, p_type vid_obj_type)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO Video_Objects (vid, type)
+    VALUES (p_vid, p_type)
+    ON CONFLICT (vid, type) DO NOTHING;
+
+    DELETE FROM Transcribe_Jobs
+    WHERE vid = p_vid AND type = p_type;
+END;
+$$ LANGUAGE plpgsql;
 

@@ -34,5 +34,4 @@ jobs:
         cache-to: type=registry,ref=ghcr.io/sverdlovsky/svh-api:cache,mode=max
         tags: |
           ghcr.io/sverdlovsky/svh-api:latest
-          ghcr.io/sverdlovsky/svh-api:0.1.0
 

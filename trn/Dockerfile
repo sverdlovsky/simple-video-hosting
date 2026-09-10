@@ -7,7 +7,7 @@ RUN apk add \
     make \
     gcc
 
-WORKDIR /srv/api
+WORKDIR /srv/trn
 
 RUN cargo init
 
@@ -24,14 +24,16 @@ COPY src src
 RUN cargo build --release
 
 
-FROM scratch
+FROM docker.io/library/alpine:latest
 
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /srv/api/target/release/svh /svh
+RUN apk add --no-cache ffmpeg
+
+COPY --from=build /srv/trn/target/release/svh /usr/bin/svh
+
+RUN addgroup -g 10001 appgroup && \
+    adduser -D -u 10001 -G appgroup appuser
 
 USER 10001:10001
 
-EXPOSE 8080
-
-ENTRYPOINT [ "/svh" ]
+ENTRYPOINT [ "/usr/bin/svh" ]
 
