@@ -264,10 +264,10 @@ $$ LANGUAGE plpgsql STABLE;
 CREATE OR REPLACE FUNCTION get_trn_job()
 RETURNS TABLE (job_vid SMALLINT, job_type vid_obj_type) AS $$
 DECLARE
-    found RECORD;
+    job_row RECORD;
 BEGIN
     SELECT v.id AS vid, t.type
-    INTO found
+    INTO job_row
     FROM Videos v
     CROSS JOIN unnest(enum_range(NULL::vid_obj_type)) AS t(type)
     WHERE t.type != 'orig'
@@ -282,20 +282,20 @@ BEGIN
     ORDER BY v.cat
     LIMIT 1;
 
-    IF found IS NULL THEN
+    IF job_row IS NULL THEN
         RETURN;
     END IF;
 
     INSERT INTO Transcribe_Jobs (vid, type)
-    VALUES (found.vid, found.type)
+    VALUES (job_row.vid, job_row.type)
     ON CONFLICT (vid, type) DO NOTHING;
 
     IF NOT FOUND THEN
         RETURN;
     END IF;
 
-    job_vid := found.vid;
-    job_type := found.type;
+    job_vid := job_row.vid;
+    job_type := job_row.type;
     RETURN NEXT;
 END;
 $$ LANGUAGE plpgsql;
