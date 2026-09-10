@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use aws_sdk_s3::config::Credentials;
-use futures_util::TryStreamExt;
 use sqlx::postgres::PgPoolOptions;
 use std::{
     env,

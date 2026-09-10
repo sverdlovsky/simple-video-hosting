@@ -131,7 +131,7 @@
       </svg>
       <input type="text" bind:value={search} placeholder="Search..." />
     </div>
-    <div class="parameters"
+    <div class="parameters">
       <div class="categories">
         <button class:active={!kind} onclick={() => delKind()}> All </button>
         <button class:active={kind === "full"} onclick={() => setKind("full")}>
