@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use aws_sdk_s3::config::Credentials;
+use futures_util::TryStreamExt;
 use sqlx::postgres::PgPoolOptions;
 use std::{
     env,
@@ -14,31 +15,13 @@ struct AppState {
     db: sqlx::Pool<sqlx::Postgres>,
     s3: aws_sdk_s3::Client,
     s3_bucket: String,
-}
-
-#[derive(sqlx::Type, Debug, Clone, Copy, PartialEq, Eq)]
-#[sqlx(type_name = "vid_obj_type", rename_all = "lowercase")]
-enum VidObjType {
-    Preview,
-    Orig,
-    High,
-    Low,
-}
-
-impl VidObjType {
-    fn as_filename(&self) -> &'static str {
-        match self {
-            VidObjType::Preview => "preview.jpg",
-            VidObjType::Orig => "orig.mp4",
-            VidObjType::High => "high.mp4",
-            VidObjType::Low => "low.mp4",
-        }
-    }
+    lease_seconds: i32,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+
     let dsn = env::var("DATABASE_URL").context("Environment variable DATABASE_URL is not set!")?;
     let pool = PgPoolOptions::new()
         .max_connections(num_cpus::get() as u32 * 2)
@@ -55,7 +38,12 @@ async fn main() -> anyhow::Result<()> {
     let s3_region = env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
     let s3_access_key = env::var("S3_ACCESS_KEY").context("Environment variable S3_ACCESS_KEY is not set!")?;
     let s3_secret_key = env::var("S3_SECRET_KEY").context("Environment variable S3_SECRET_KEY is not set!")?;
-    let s3_bucket = env::var("S3_PUBLIC_BUCKET").unwrap_or_else(|_| "svh".to_string());
+    let s3_bucket = env::var("S3_BUCKET").unwrap_or_else(|_| "svh".to_string());
+
+    let lease_seconds = env::var("LEASE")
+        .unwrap_or_else(|_| "900".to_string())
+        .parse::<i32>()
+        .context("LEASE_SECONDS must be a number")?;
 
     let s3_credentials = Credentials::new(
         s3_access_key,
@@ -79,22 +67,21 @@ async fn main() -> anyhow::Result<()> {
         db: pool,
         s3: s3_client,
         s3_bucket,
+        lease_seconds,
     };
 
     tracing::info!("Transcoder started, polling every {}s", poll_interval);
 
     loop {
         match fetch_job(&state).await {
-            Ok(Some((vid, job_type))) => {
-                tracing::info!("Picked up job: vid={} type={:?}", vid, job_type);
-                if let Err(e) = process_job(&state, vid, job_type).await {
-                    tracing::error!("Job failed: vid={} type={:?} error={:?}", vid, job_type, e);
+            Ok(Some((kind, id))) => {
+                tracing::info!("Picked up job: kind={} id={}", kind, id);
+                if let Err(e) = process_job(&state, &kind, id).await {
+                    tracing::error!("Job failed: kind={} id={} error={:?}", kind, id, e);
+                } else if let Err(e) = complete_job(&state, &kind, id).await {
+                    tracing::error!("Failed to delete task: {:?}", e);
                 } else {
-                    if let Err(e) = complete_job(&state, vid, job_type).await {
-                        tracing::error!("Failed to mark job complete: {:?}", e);
-                    } else {
-                        tracing::info!("Job done: vid={} type={:?}", vid, job_type);
-                    }
+                    tracing::info!("Job done: kind={} id={}", kind, id);
                 }
             }
             Ok(None) => {
@@ -108,72 +95,167 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn fetch_job(state: &AppState) -> Result<Option<(i16, VidObjType)>> {
-    let row: Option<(i16, VidObjType)> =
-        sqlx::query_as("SELECT job_vid, job_type FROM get_trn_job()")
-            .fetch_optional(&state.db)
-            .await?;
+async fn fetch_job(state: &AppState) -> Result<Option<(String, i16)>> {
+    let row: Option<(String, i16)> = sqlx::query_as(
+        "SELECT job_kind, job_id FROM get_trn_job($1)"
+    )
+        .bind(state.lease_seconds)
+        .fetch_optional(&state.db)
+        .await?;
 
     Ok(row)
 }
 
-async fn complete_job(state: &AppState, vid: i16, job_type: VidObjType) -> Result<()> {
-    sqlx::query("SELECT complete_trn_job($1, $2)")
-        .bind(vid)
-        .bind(job_type)
+async fn complete_job(state: &AppState, kind: &str, id: i16) -> Result<()> {
+    sqlx::query("DELETE FROM Transcode_Tasks WHERE kind = $1 AND id = $2")
+        .bind(kind)
+        .bind(id)
         .execute(&state.db)
         .await?;
 
     Ok(())
 }
 
-async fn process_job(state: &AppState, vid: i16, job_type: VidObjType) -> Result<()> {
-    let work_dir = format!("/tmp/trn/{}", vid);
+async fn process_job(state: &AppState, kind: &str, id: i16) -> Result<()> {
+    let work_dir = format!("/tmp/trn/{}_{}", kind, id);
     tokio::fs::create_dir_all(&work_dir).await?;
 
-    let result = process_job_inner(state, vid, job_type, &work_dir).await;
+    let result = process_job_inner(state, kind, id, &work_dir).await;
 
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
 
     result
 }
 
-async fn process_job_inner(
-    state: &AppState,
-    vid: i16,
-    job_type: VidObjType,
-    work_dir: &str,
-) -> Result<()> {
-    let orig_key = format!("video/{}/orig.mp4", vid);
-    let orig_path = format!("{}/orig.mp4", work_dir);
+async fn process_job_inner(state: &AppState, kind: &str, id: i16, work_dir: &str) -> Result<()> {
+    match kind {
+        "video" => process_video(state, id, work_dir).await,
+        "preview" => process_preview(state, id, work_dir).await,
+        "app" | "avatar" => process_square_image(state, kind, id, work_dir).await,
+        other => anyhow::bail!("Unknown task kind: {}", other),
+    }
+}
 
+async fn process_video(state: &AppState, id: i16, work_dir: &str) -> Result<()> {
+    let orig_key = format!("video/{}/orig", id);
+    let orig_path = format!("{}/orig.mp4", work_dir);
     download_object(state, &orig_key, &orig_path).await?;
 
-    match job_type {
-        VidObjType::Preview => {
-            let out_path = format!("{}/preview.jpg", work_dir);
-            make_preview(&orig_path, &out_path).await?;
-            let key = format!("previews/{}.jpg", vid);
-            upload_object(state, &out_path, &key, "image/jpeg").await?;
-        }
-        VidObjType::High => {
-            let out_path = format!("{}/high.mp4", work_dir);
-            make_variant(&orig_path, &out_path, 1080, 30, "8M").await?;
-            let key = format!("video/{}/high.mp4", vid);
-            upload_object(state, &out_path, &key, "video/mp4").await?;
-        }
-        VidObjType::Low => {
-            let out_path = format!("{}/low.mp4", work_dir);
-            make_variant(&orig_path, &out_path, 360, 30, "1M").await?;
-            let key = format!("video/{}/low.mp4", vid);
-            upload_object(state, &out_path, &key, "video/mp4").await?;
-        }
-        VidObjType::Orig => {
-            anyhow::bail!("orig is not produced by the transcoder");
-        }
-    }
+    let high_path = format!("{}/high.mp4", work_dir);
+    run_ffmpeg(&[
+        "-y", "-i", &orig_path,
+        "-vf", "scale=-2:1080,fps=60",
+        "-c:v", "libx265",
+        "-b:v", "8M",
+        "-tag:v", "hvc1",
+        "-c:a", "copy",
+        &high_path,
+    ])
+    .await?;
+    upload_object(state, &high_path, &format!("video/{}/high", id), "video/mp4").await?;
+
+    let low_path = format!("{}/low.mp4", work_dir);
+    run_ffmpeg(&[
+        "-y", "-i", &orig_path,
+        "-vf", "scale=-2:360,fps=30",
+        "-c:v", "libx264",
+        "-b:v", "1M",
+        "-c:a", "copy",
+        &low_path,
+    ])
+    .await?;
+    upload_object(state, &low_path, &format!("video/{}/low", id), "video/mp4").await?;
 
     Ok(())
+}
+
+async fn process_preview(state: &AppState, id: i16, work_dir: &str) -> Result<()> {
+    let preview_orig_key = format!("preview/{}/orig", id);
+    let preview_orig_path = format!("{}/orig.png", work_dir);
+
+    if !object_exists(state, &preview_orig_key).await? {
+        let video_orig_key = format!("video/{}/orig", id);
+        let video_orig_path = format!("{}/video_orig.mp4", work_dir);
+        download_object(state, &video_orig_key, &video_orig_path).await?;
+
+        run_ffmpeg(&[
+            "-y",
+            "-ss", "00:00:03",
+            "-i", &video_orig_path,
+            "-vframes", "1",
+            "-quality", "90",
+            &preview_orig_path,
+        ])
+        .await?;
+
+        upload_object(state, &preview_orig_path, &preview_orig_key, "image/webp").await?;
+    } else {
+        download_object(state, &preview_orig_key, &preview_orig_path).await?;
+    }
+
+    let high_path = format!("{}/high.webp", work_dir);
+    run_ffmpeg(&[
+        "-y", "-i", &preview_orig_path,
+        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black@0",
+        "-quality", "80",
+        &high_path,
+    ])
+    .await?;
+    upload_object(state, &high_path, &format!("preview/{}/high", id), "image/webp").await?;
+
+    let low_path = format!("{}/low.webp", work_dir);
+    run_ffmpeg(&[
+        "-y", "-i", &preview_orig_path,
+        "-vf", "scale=768:432:force_original_aspect_ratio=decrease,pad=768:432:(ow-iw)/2:(oh-ih)/2:color=black@0",
+        "-quality", "80",
+        &low_path,
+    ])
+    .await?;
+    upload_object(state, &low_path, &format!("preview/{}/low", id), "image/webp").await?;
+
+    Ok(())
+}
+
+async fn process_square_image(state: &AppState, kind: &str, id: i16, work_dir: &str) -> Result<()> {
+    let orig_key = format!("{}/{}/orig", kind, id);
+    let orig_path = format!("{}/orig", work_dir);
+    download_object(state, &orig_key, &orig_path).await?;
+
+    let high_path = format!("{}/high.webp", work_dir);
+    run_ffmpeg(&[
+        "-y", "-i", &orig_path,
+        "-vf", "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=black@0",
+        "-lossless", "1",
+        &high_path,
+    ])
+    .await?;
+    upload_object(state, &high_path, &format!("{}/{}/high", kind, id), "image/webp").await?;
+
+    let low_path = format!("{}/low.webp", work_dir);
+    run_ffmpeg(&[
+        "-y", "-i", &orig_path,
+        "-vf", "scale=64:64:force_original_aspect_ratio=decrease,pad=64:64:(ow-iw)/2:(oh-ih)/2:color=black@0",
+        "-lossless", "1",
+        &low_path,
+    ])
+    .await?;
+    upload_object(state, &low_path, &format!("{}/{}/low", kind, id), "image/webp").await?;
+
+    Ok(())
+}
+
+async fn object_exists(state: &AppState, key: &str) -> Result<bool> {
+    match state.s3.head_object().bucket(&state.s3_bucket).key(key).send().await {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            if let Some(service_err) = e.as_service_error() {
+                if service_err.is_not_found() {
+                    return Ok(false);
+                }
+            }
+            Err(e).context("Failed to check object existence")
+        }
+    }
 }
 
 async fn download_object(state: &AppState, key: &str, dest_path: &str) -> Result<()> {
@@ -212,34 +294,6 @@ async fn upload_object(state: &AppState, src_path: &str, key: &str, content_type
         .context("Failed to upload to S3")?;
 
     Ok(())
-}
-
-async fn make_preview(input: &str, output: &str) -> Result<()> {
-    run_ffmpeg(&[
-        "-y", "-i", input,
-        "-ss", "00:00:03",
-        "-vframes", "1",
-        output,
-    ])
-    .await
-}
-
-async fn make_variant(
-    input: &str,
-    output: &str,
-    height: u32,
-    fps: u32,
-    bitrate: &str,
-) -> Result<()> {
-    run_ffmpeg(&[
-        "-y", "-i", input,
-        "-vf", &format!("scale=-2:{},fps={}", height, fps),
-        "-c:v", "libx264",
-        "-b:v", bitrate,
-        "-c:a", "copy",
-        output,
-    ])
-    .await
 }
 
 async fn run_ffmpeg(args: &[&str]) -> Result<()> {

@@ -33,7 +33,7 @@
       />
     </svg>
     <img
-      src={`https://media.${domain}/previews/${id}.webp`}
+      src={`https://media.${domain}/preview/${id}/low`}
       alt=""
       loading="lazy"
     />
@@ -59,7 +59,7 @@
         style="z-index: {users.length - i}"
       >
         <img
-          src={`https://media.${domain}/avatars/${user.id}/low.webp`}
+          src={`https://media.${domain}/avatar/${user.id}/low`}
           alt={user.email}
           class="user_icon"
           loading="lazy"
@@ -76,7 +76,7 @@
         style="z-index: {apps.length - i}"
       >
         <img
-          src={`https://media.${domain}/apps/${app.id}/low.webp`}
+          src={`https://media.${domain}/app/${app.id}/low`}
           alt={app.title}
           class="app_icon"
           loading="lazy"

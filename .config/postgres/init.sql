@@ -3,13 +3,10 @@ CREATE USER svh_user WITH PASSWORD 'SET_YOUR_PASSWORD';
 ALTER DATABASE svh_db OWNER TO svh_user;
 
 
-CREATE TYPE vid_obj_type AS ENUM ('preview', 'orig', 'high', 'low');
-
 CREATE TABLE Users (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL,
     name TEXT NOT NULL,
-    bot BOOLEAN DEFAULT false,
     cat TIMESTAMP DEFAULT now()
 );
 
@@ -20,20 +17,6 @@ CREATE TABLE Videos (
     title TEXT,
     description TEXT,
     cat TIMESTAMP DEFAULT now()
-);
-
-CREATE TABLE Video_Objects (
-    vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
-    type vid_obj_type NOT NULL,
-    cat TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (vid, type)
-);
-
-CREATE TABLE Transcode_Jobs (
-    vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
-    type vid_obj_type NOT NULL,
-    cat TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (vid, type)
 );
 
 CREATE TABLE Roles (
@@ -94,6 +77,14 @@ CREATE TABLE Video_Music_Links (
     vid SMALLINT REFERENCES Videos(id),
     mid SMALLINT REFERENCES Music(id),
     PRIMARY KEY (vid, mid)
+);
+
+CREATE TABLE Transcode_Tasks (
+    kind TEXT NOT NULL,
+    id SMALLINT NOT NULL,
+    prm TIMESTAMP DEFAULT NOW(),
+    cat TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (kind, id)
 );
 
 CREATE OR REPLACE FUNCTION get_user_videos(
@@ -261,54 +252,30 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
-CREATE OR REPLACE FUNCTION get_trn_job()
-RETURNS TABLE (job_vid SMALLINT, job_type vid_obj_type) AS $$
+CREATE OR REPLACE FUNCTION get_trn_job(lease_seconds INT DEFAULT 900)
+RETURNS TABLE (job_kind TEXT, job_id SMALLINT) AS $$
 DECLARE
-    job_row RECORD;
+    picked RECORD;
 BEGIN
-    SELECT v.id AS vid, t.type
-    INTO job_row
-    FROM Videos v
-    CROSS JOIN unnest(enum_range(NULL::vid_obj_type)) AS t(type)
-    WHERE t.type != 'orig'
-      AND NOT EXISTS (
-          SELECT 1 FROM Video_Objects vo
-          WHERE vo.vid = v.id AND vo.type = t.type
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM Transcode_Jobs tj
-          WHERE tj.vid = v.id AND tj.type = t.type
-      )
-    ORDER BY v.cat
-    LIMIT 1;
+    SELECT t.kind, t.id
+    INTO picked
+    FROM Transcode_Tasks t
+    WHERE t.prm < NOW()
+    ORDER BY t.cat
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED;
 
-    IF job_row IS NULL THEN
+    IF picked IS NULL THEN
         RETURN;
     END IF;
 
-    INSERT INTO Transcode_Jobs (vid, type)
-    VALUES (job_row.vid, job_row.type)
-    ON CONFLICT (vid, type) DO NOTHING;
+    UPDATE Transcode_Tasks
+    SET prm = NOW() + (lease_seconds || ' seconds')::INTERVAL
+    WHERE kind = picked.kind AND id = picked.id;
 
-    IF NOT FOUND THEN
-        RETURN;
-    END IF;
-
-    job_vid := job_row.vid;
-    job_type := job_row.type;
+    job_kind := picked.kind;
+    job_id := picked.id;
     RETURN NEXT;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION complete_trn_job(p_vid SMALLINT, p_type vid_obj_type)
-RETURNS VOID AS $$
-BEGIN
-    INSERT INTO Video_Objects (vid, type)
-    VALUES (p_vid, p_type)
-    ON CONFLICT (vid, type) DO NOTHING;
-
-    DELETE FROM Transcode_Jobs
-    WHERE vid = p_vid AND type = p_type;
 END;
 $$ LANGUAGE plpgsql;
 
