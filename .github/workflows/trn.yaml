@@ -1,10 +1,10 @@
-name: Simple Video Hosting - Web Server
+name: Simple Video Hosting - Video Transcoder
 
 on:
   push:
     branches: [ main ]
     paths:
-    - 'web/**'
+    - 'trn/**'
 
 jobs:
   build:
@@ -27,11 +27,11 @@ jobs:
     - name: Build image
       uses: docker/build-push-action@v5
       with:
-        context: ./web
+        context: ./trn
         push: true
         platforms: linux/amd64
-        cache-from: type=registry,ref=ghcr.io/sverdlovsky/svh-web:cache
-        cache-to: type=registry,ref=ghcr.io/sverdlovsky/svh-web:cache,mode=max
+        cache-from: type=registry,ref=ghcr.io/sverdlovsky/svh-trn:cache
+        cache-to: type=registry,ref=ghcr.io/sverdlovsky/svh-trn:cache,mode=max
         tags: |
-          ghcr.io/sverdlovsky/svh-web:latest
+          ghcr.io/sverdlovsky/svh-trn:latest
 

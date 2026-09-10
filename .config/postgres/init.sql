@@ -3,6 +3,8 @@ CREATE USER svh_user WITH PASSWORD 'SET_YOUR_PASSWORD';
 ALTER DATABASE svh_db OWNER TO svh_user;
 
 
+CREATE TYPE vid_obj_type AS ENUM ('preview', 'orig', 'high', 'low');
+
 CREATE TABLE Users (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL,
@@ -18,6 +20,20 @@ CREATE TABLE Videos (
     title TEXT,
     description TEXT,
     cat TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE Video_Objects (
+    vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
+    type vid_obj_type NOT NULL,
+    cat TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (vid, type)
+);
+
+CREATE TABLE Transcribe_Jobs (
+    vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
+    type vid_obj_type NOT NULL,
+    cat TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (vid, type)
 );
 
 CREATE TABLE Roles (
@@ -194,7 +210,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
-CREATE OR REPLACE FUNCTION Video.get_meta()
+CREATE OR REPLACE FUNCTION get_meta()
 RETURNS jsonb AS $$
 BEGIN
     SELECT jsonb_build_object(
@@ -244,4 +260,55 @@ BEGIN
     WHERE v.id = p_vid;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION get_trn_job()
+RETURNS TABLE (job_vid SMALLINT, job_type vid_obj_type) AS $$
+DECLARE
+    found RECORD;
+BEGIN
+    SELECT v.id AS vid, t.type
+    INTO found
+    FROM Videos v
+    CROSS JOIN unnest(enum_range(NULL::vid_obj_type)) AS t(type)
+    WHERE t.type != 'orig'
+      AND NOT EXISTS (
+          SELECT 1 FROM Video_Objects vo
+          WHERE vo.vid = v.id AND vo.type = t.type
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM Transcribe_Jobs tj
+          WHERE tj.vid = v.id AND tj.type = t.type
+      )
+    ORDER BY v.cat
+    LIMIT 1;
+
+    IF found IS NULL THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO Transcribe_Jobs (vid, type)
+    VALUES (found.vid, found.type)
+    ON CONFLICT (vid, type) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    job_vid := found.vid;
+    job_type := found.type;
+    RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION complete_trn_job(p_vid SMALLINT, p_type vid_obj_type)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO Video_Objects (vid, type)
+    VALUES (p_vid, p_type)
+    ON CONFLICT (vid, type) DO NOTHING;
+
+    DELETE FROM Transcribe_Jobs
+    WHERE vid = p_vid AND type = p_type;
+END;
+$$ LANGUAGE plpgsql;
 
