@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+aws-sdk-s3 = "1.144.0"
+aws-config = "1.11.0"
+num_cpus = "1.17.0"
 serde = { version = "1.0.225", features = ["derive"] }
 serde_json = "1.0.145"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-native-tls"] }
@@ -12,6 +15,4 @@ tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 openssl = { version="0.10", features = ["vendored"] }
-aws-sdk-s3 = "1.144.0"
-aws-config = "1.11.0"
 
