@@ -29,7 +29,7 @@ CREATE TABLE Video_Objects (
     PRIMARY KEY (vid, type)
 );
 
-CREATE TABLE Transcribe_Jobs (
+CREATE TABLE Transcode_Jobs (
     vid SMALLINT REFERENCES Videos(id) ON DELETE CASCADE,
     type vid_obj_type NOT NULL,
     cat TIMESTAMP DEFAULT NOW(),
@@ -276,7 +276,7 @@ BEGIN
           WHERE vo.vid = v.id AND vo.type = t.type
       )
       AND NOT EXISTS (
-          SELECT 1 FROM Transcribe_Jobs tj
+          SELECT 1 FROM Transcode_Jobs tj
           WHERE tj.vid = v.id AND tj.type = t.type
       )
     ORDER BY v.cat
@@ -286,7 +286,7 @@ BEGIN
         RETURN;
     END IF;
 
-    INSERT INTO Transcribe_Jobs (vid, type)
+    INSERT INTO Transcode_Jobs (vid, type)
     VALUES (job_row.vid, job_row.type)
     ON CONFLICT (vid, type) DO NOTHING;
 
@@ -307,7 +307,7 @@ BEGIN
     VALUES (p_vid, p_type)
     ON CONFLICT (vid, type) DO NOTHING;
 
-    DELETE FROM Transcribe_Jobs
+    DELETE FROM Transcode_Jobs
     WHERE vid = p_vid AND type = p_type;
 END;
 $$ LANGUAGE plpgsql;

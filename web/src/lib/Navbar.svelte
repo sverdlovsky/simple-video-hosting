@@ -10,6 +10,7 @@
 
   let search: string = $state("");
   let kind = $derived(page.url.searchParams.get("kind"));
+  let qual = $derived(page.url.searchParams.get("qual") ?? "high");
 
   function getState(): string {
     const params = page.url.searchParams;
@@ -35,6 +36,22 @@
     const url: URL = page.url;
 
     url.searchParams.set("kind", value);
+
+    goto(url, { replaceState: true });
+  }
+
+  function delQual(): void {
+    const url: URL = page.url;
+
+    url.searchParams.delete("qual");
+
+    goto(url, { replaceState: true });
+  }
+
+  function setQual(value: string): void {
+    const url: URL = page.url;
+
+    url.searchParams.set("qual", value);
 
     goto(url, { replaceState: true });
   }
@@ -114,17 +131,30 @@
       </svg>
       <input type="text" bind:value={search} placeholder="Search..." />
     </div>
-    <div class="categories">
-      <button class:active={!kind} onclick={() => delKind()}> All </button>
-      <button class:active={kind === "full"} onclick={() => setKind("full")}>
-        Fulls
-      </button>
-      <button class:active={kind === "clip"} onclick={() => setKind("clip")}>
-        Clips
-      </button>
-      <button class:active={kind === "short"} onclick={() => setKind("short")}>
-        Shorts
-      </button>
+    <div class="parameters"
+      <div class="categories">
+        <button class:active={!kind} onclick={() => delKind()}> All </button>
+        <button class:active={kind === "full"} onclick={() => setKind("full")}>
+          Fulls
+        </button>
+        <button class:active={kind === "clip"} onclick={() => setKind("clip")}>
+          Clips
+        </button>
+        <button class:active={kind === "short"} onclick={() => setKind("short")}>
+          Shorts
+        </button>
+      </div>
+      <div class="qualities">
+        <button class:active={qual === "low"} onclick={() => setQual("low")}>
+          360p
+        </button>
+        <button class:active={qual === "high"} onclick={() => delQual()}>
+          1080p
+        </button>
+        <button class:active={qual === "orig"} onclick={() => setQual("orig")}>
+          Original
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -288,15 +318,29 @@
     color: var(--color-zinc-200);
   }
 
-  .categories {
+  .parameters {
     display: flex;
     flex-direction: row;
-    justify-content: start;
+    justify-content: space-between;
+  }
+
+  .categories,
+  .qualities {
+    display: flex;
+    flex-direction: row;
     overflow: scroll;
     gap: 8px;
   }
 
-  .categories button {
+  .categories {
+    justify-content: start;
+  }
+
+  .qualities {
+    justify-content: end;
+  }
+
+  .parameters button {
     height: 40px;
     border: none;
     border-radius: calc(infinity * 1px);
@@ -313,7 +357,7 @@
     line-height: 0px;
   }
 
-  .categories button:hover {
+  .parameters button:hover {
     background-color: var(--color-zinc-900);
     color: var(--color-white);
     transition:
@@ -321,7 +365,7 @@
       color 0.3s ease-in-out;
   }
 
-  .categories button.active {
+  .parameters button.active {
     background-color: var(--color-white);
     color: var(--color-black);
   }

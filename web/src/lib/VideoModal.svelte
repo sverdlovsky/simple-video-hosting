@@ -9,6 +9,8 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
+  let qual = $derived(page.url.searchParams.get("qual") ?? "high");
+
   $effect(() => {
     if (!id) {
       videoUrl = null;
@@ -19,7 +21,7 @@
     error = null;
     videoUrl = null;
 
-    fetch(`https://api.${domain}/video/${id}/orig`, {
+    fetch(`https://api.${domain}/video/${id}/${qual}`, {
       method: "GET",
       credentials: "include",
     })
@@ -57,6 +59,50 @@
         <track kind="captions" />
       </video>
     {/if}
+
+    <!--
+    <h3>{title}</h3>
+
+    <p>{cat}</p>
+
+    <p>{desc}</p>
+
+    <div class="users">
+      {#each users as user, i}
+        <button
+          class="user_button"
+          onclick={() => queryAdd("user", user.id)}
+        >
+          <img
+            src={`https://media.${domain}/avatars/${user.id}.png`}
+            alt={user.email}
+            class="user_icon"
+            loading="lazy"
+          />
+        </button>
+        <h2>{user.name}</h2>
+        <p>{user.desc}</p>
+      {/each}
+    </div>
+
+    <div class="apps">
+      {#each apps as app, i}
+        <button
+          class="app_button"
+          onclick={() => queryAdd("app", app.id)}
+        >
+          <img
+            src={`https://media.${domain}/apps/${app.id}.png`}
+            alt={app.title}
+            class="app_icon"
+            loading="lazy"
+          />
+        </button>
+        <h2>{app.name}</h2>
+        <p>{app.desc}</p>
+      {/each}
+    </div>
+    -->
   </button>
 {/if}
 

@@ -33,7 +33,7 @@
       />
     </svg>
     <img
-      src={`https://media.${domain}/previews/${id}.jpg`}
+      src={`https://media.${domain}/previews/${id}.webp`}
       alt=""
       loading="lazy"
     />
@@ -59,7 +59,7 @@
         style="z-index: {users.length - i}"
       >
         <img
-          src={`https://media.${domain}/avatars/${user.id}.png`}
+          src={`https://media.${domain}/avatars/${user.id}/low.webp`}
           alt={user.email}
           class="user_icon"
           loading="lazy"
@@ -76,7 +76,7 @@
         style="z-index: {apps.length - i}"
       >
         <img
-          src={`https://media.${domain}/apps/${app.id}.png`}
+          src={`https://media.${domain}/apps/${app.id}/low.webp`}
           alt={app.title}
           class="app_icon"
           loading="lazy"
@@ -95,9 +95,9 @@
 
   p {
     grid-area: title;
-    line-height: 0px;
     text-align: center;
     color: var(--color-white);
+    margin: 0px;
   }
 
   .videocard {
@@ -109,6 +109,7 @@
       "tags tags tags"
       "users title apps";
     gap: 4px;
+    align-content: start;
   }
 
   .preview {
@@ -159,9 +160,12 @@
 
   .users {
     grid-area: users;
+    min-width: 64px;
+    height: 32px;
     display: flex;
     flex-direction: row;
     justify-content: start;
+    align-items: start;
   }
 
   .user_button {
@@ -186,9 +190,12 @@
 
   .apps {
     grid-area: apps;
+    min-width: 64px;
+    height: 32px;
     display: flex;
     flex-direction: row-reverse;
     justify-content: end;
+    align-items: start;
   }
 
   .app_button {
