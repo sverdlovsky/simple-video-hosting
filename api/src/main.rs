@@ -311,7 +311,7 @@ async fn get_video(
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
-    let object_key = format!("video/{}/{}.mp4", video_id, quality);
+    let object_key = format!("video/{}/{}", video_id, quality);
 
     let presigning_config = match PresigningConfig::expires_in(state.download_ttl) {
         Ok(c) => c,
@@ -389,7 +389,7 @@ async fn post_video(
         }
     };
 
-    let object_key = format!("video/{}/orig.mp4", video_id.0);
+    let object_key = format!("video/{}/orig", video_id.0);
 
     let presigning_config = match PresigningConfig::expires_in(state.upload_ttl) {
         Ok(c) => c,
