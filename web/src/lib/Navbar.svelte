@@ -8,6 +8,7 @@
   let title: string = window.location.hostname.split(".")[0];
   title = title.charAt(0).toUpperCase() + title.slice(1);
 
+  let selfID: number = $state("");
   let search: string = $state("");
   let kind = $derived(page.url.searchParams.get("kind"));
   let qual = $derived(page.url.searchParams.get("qual") ?? "orig");
@@ -78,12 +79,20 @@
           method: "GET",
           credentials: "include",
         });
+
         if (!res.ok) {
           console.error("Request error");
           videos.set([]);
           return;
         }
-        videos.set((await res.json()) as Video[]);
+
+        const data = await res.json() as {
+          id: number;
+          video: Video[];
+        };
+
+        selfID = data.id;
+        videos.set(data.video);
       } catch (err) {
         console.error("Network error", err);
         videos.set([]);
@@ -114,13 +123,17 @@
           </svg>
           <p>Add</p>
         </button>
-        <a href={`https://auth.${domain}/?next=https://${domain}`} class="sign">
-          <svg viewBox="0 0 24 24">
-            <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-          <p>Sign in</p>
-        </a>
+        {#if selfID}
+          <img src={`https://media.${domain}/avatar/${selfID}/high`} alt="" />
+        {:else}
+          <a href={`https://auth.${domain}/?next=https://${domain}`} class="sign">
+            <svg viewBox="0 0 24 24">
+              <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <p>Sign in</p>
+          </a>
+        {/if}
       </div>
     </div>
     <div class="search">
@@ -224,6 +237,13 @@
     gap: 8px;
     align-items: center;
     text-decoration: none;
+  }
+
+  .actions img {
+    height: 40px;
+    width: 40px;
+    border-radius: calc(infinity * 1px);
+    margin-left: 10px;
   }
 
   .add {

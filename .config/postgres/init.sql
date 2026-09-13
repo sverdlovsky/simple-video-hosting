@@ -103,99 +103,105 @@ DECLARE
 BEGIN
     SELECT id INTO u_id FROM Users WHERE email = p_email;
     IF u_id IS NULL THEN
-        RETURN '[]'::json;
+        RETURN json_build_object(
+            'id', NULL,
+            'video', '[]'::json
+        );
     END IF;
 
-    RETURN (
-        SELECT COALESCE(
-            json_agg(x ORDER BY
-                CASE
-                    WHEN is_random AND p_search IS NULL
-                    THEN random()
-                    ELSE EXTRACT(EPOCH FROM cat)
-                END DESC
-            ),
-            '[]'::json
-        ) FROM (
-            SELECT v.cat, json_build_object(
-                'id', v.id,
-                'title', v.title,
-                'tags', (
-                    SELECT json_agg(
-                        json_build_object(
-                            'id', t.id,
-                            'title', t.title,
-                            'color', t.color
-                        )
-                    )
-                    FROM Tags t
-                    JOIN Video_Tag_Links tp ON tp.tid = t.id
-                    WHERE tp.vid = v.id
+    RETURN json_build_object(
+        'id', u_id,
+        'video', (
+            SELECT COALESCE(
+                json_agg(x ORDER BY
+                    CASE
+                        WHEN is_random AND p_search IS NULL
+                        THEN random()
+                        ELSE EXTRACT(EPOCH FROM cat)
+                    END DESC
                 ),
-                'users', (
-                    SELECT json_agg(
-                        json_build_object(
-                            'id', u.id,
-                            'email', u.email,
-                            'name', u.name,
-                            'role', r.title
+                '[]'::json
+            ) FROM (
+                SELECT v.cat, json_build_object(
+                    'id', v.id,
+                    'title', v.title,
+                    'tags', (
+                        SELECT json_agg(
+                            json_build_object(
+                                'id', t.id,
+                                'title', t.title,
+                                'color', t.color
+                            )
                         )
-                    )
-                    FROM Video_User_Links up
-                    JOIN Users u ON u.id = up.uid
-                    JOIN Roles r ON r.id = up.rid
-                    WHERE up.vid = v.id
-                ),
-                'apps', (
-                    SELECT json_agg(
-                        json_build_object(
-                            'id', a.id,
-                            'title', a.title
+                        FROM Tags t
+                        JOIN Video_Tag_Links tp ON tp.tid = t.id
+                        WHERE tp.vid = v.id
+                    ),
+                    'users', (
+                        SELECT json_agg(
+                            json_build_object(
+                                'id', u.id,
+                                'email', u.email,
+                                'name', u.name,
+                                'role', r.title
+                            )
                         )
+                        FROM Video_User_Links up
+                        JOIN Users u ON u.id = up.uid
+                        JOIN Roles r ON r.id = up.rid
+                        WHERE up.vid = v.id
+                    ),
+                    'apps', (
+                        SELECT json_agg(
+                            json_build_object(
+                                'id', a.id,
+                                'title', a.title
+                            )
+                        )
+                        FROM Apps a
+                        JOIN Video_App_Links ap ON ap.aid = a.id
+                        WHERE ap.vid = v.id
                     )
-                    FROM Apps a
-                    JOIN Video_App_Links ap ON ap.aid = a.id
-                    WHERE ap.vid = v.id
+                ) AS x
+                FROM Videos v
+                JOIN Video_User_Links up ON up.vid = v.id
+                WHERE up.uid = u_id AND (
+                    p_search IS NULL
+                    OR
+                    v.title ILIKE '%' || p_search || '%'
+                ) AND (
+                    p_kind IS NULL
+                    OR
+                    v.kind = CASE p_kind
+                        WHEN 'full' THEN 0
+                        WHEN 'clip' THEN 1
+                        WHEN 'short' THEN 2
+                        ELSE v.kind
+                    END
+                ) AND (
+                    p_tag IS NULL
+                    OR
+                    EXISTS (
+                        SELECT 1 FROM Video_Tag_Links tp
+                        WHERE tp.vid = v.id AND tp.tid = p_tag
+                    )
+                ) AND (
+                    p_user IS NULL
+                    OR
+                    EXISTS (
+                        SELECT 1 FROM Video_User_Links up2
+                        WHERE up2.vid = v.id AND up2.uid = p_user
+                    )
+                ) AND (
+                    p_app IS NULL
+                    OR
+                    EXISTS (
+                        SELECT 1 FROM Video_App_Links ap
+                        WHERE ap.vid = v.id AND ap.aid = p_app
+                    )
                 )
-            ) AS x
-            FROM Videos v
-            JOIN Video_User_Links up ON up.vid = v.id
-            WHERE up.uid = u_id AND (
-                p_search IS NULL
-                OR
-                v.title ILIKE '%' || p_search || '%'
-            ) AND (
-                p_kind IS NULL
-                OR
-                v.kind = CASE p_kind
-                    WHEN 'full' THEN 0
-                    WHEN 'clip' THEN 1
-                    WHEN 'short' THEN 2
-                    ELSE v.kind
-                END
-            ) AND (
-                p_tag IS NULL
-                OR
-                EXISTS (
-                    SELECT 1 FROM Video_Tag_Links tp
-                    WHERE tp.vid = v.id AND tp.tid = p_tag
-                )
-            ) AND (
-                p_user IS NULL
-                OR
-                EXISTS (
-                    SELECT 1 FROM Video_User_Links up2
-                    WHERE up2.vid = v.id AND up2.uid = p_user
-                )
-            ) AND (
-                p_app IS NULL
-                OR
-                EXISTS (
-                    SELECT 1 FROM Video_App_Links ap
-                    WHERE ap.vid = v.id AND ap.aid = p_app
-                )
-            )
-            LIMIT p_limit
+                LIMIT p_limit
+            ) AS data
         )
     );
 END;

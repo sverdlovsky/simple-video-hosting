@@ -9,7 +9,7 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  let qual = $derived(page.url.searchParams.get("qual") ?? "high");
+  let qual = $derived(page.url.searchParams.get("qual") ?? "orig");
 
   $effect(() => {
     if (!id) {
