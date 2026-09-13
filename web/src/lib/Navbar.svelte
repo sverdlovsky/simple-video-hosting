@@ -10,7 +10,7 @@
 
   let search: string = $state("");
   let kind = $derived(page.url.searchParams.get("kind"));
-  let qual = $derived(page.url.searchParams.get("qual") ?? "high");
+  let qual = $derived(page.url.searchParams.get("qual") ?? "orig");
 
   function getState(): string {
     const params = page.url.searchParams;
@@ -148,10 +148,10 @@
         <button class:active={qual === "low"} onclick={() => setQual("low")}>
           360p
         </button>
-        <button class:active={qual === "high"} onclick={() => delQual()}>
+        <button class:active={qual === "high"} onclick={() => setQual("high")}>
           1080p
         </button>
-        <button class:active={qual === "orig"} onclick={() => setQual("orig")}>
+        <button class:active={qual === "orig"} onclick={() => delQual()}>
           Original
         </button>
       </div>

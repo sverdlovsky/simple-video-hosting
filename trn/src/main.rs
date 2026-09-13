@@ -15,6 +15,7 @@ struct AppState {
     s3: aws_sdk_s3::Client,
     s3_bucket: String,
     lease_seconds: i32,
+    mem_max_file_size: i64,
 }
 
 #[tokio::main]
@@ -62,11 +63,17 @@ async fn main() -> anyhow::Result<()> {
 
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
+    let mem_max_file_size_mb = env::var("MEM_MAX_FILE_SIZE")
+        .unwrap_or_else(|_| "0".to_string())
+        .parse::<i64>()
+        .context("MEM_MAX_FILE_SIZE must be a number of megabytes")?;
+
     let state = AppState {
         db: pool,
         s3: s3_client,
         s3_bucket,
         lease_seconds,
+        mem_max_file_size: mem_max_file_size_mb * 1024 * 1024,
     };
 
     tracing::info!("Transcoder started, polling every {}s", poll_interval);
@@ -116,7 +123,9 @@ async fn complete_job(state: &AppState, kind: &str, id: i16) -> Result<()> {
 }
 
 async fn process_job(state: &AppState, kind: &str, id: i16) -> Result<()> {
-    let work_dir = format!("/tmp/trn/{}_{}", kind, id);
+    let root = work_root(state, kind, id).await?;
+
+    let work_dir = format!("{}/{}_{}", root, kind, id);
     tokio::fs::create_dir_all(&work_dir).await?;
 
     let result = process_job_inner(state, kind, id, &work_dir).await;
@@ -124,6 +133,30 @@ async fn process_job(state: &AppState, kind: &str, id: i16) -> Result<()> {
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
 
     result
+}
+
+async fn work_root(state: &AppState, kind: &str, id: i16) -> Result<&'static str> {
+    let size = match kind {
+        "preview" => {
+            let preview_key = format!("preview/{}/orig", id);
+            if object_exists(state, &preview_key).await? {
+                get_object_size(state, &preview_key).await?
+            } else {
+                let video_key = format!("video/{}/orig", id);
+                get_object_size(state, &video_key).await?
+            }
+        }
+        _ => {
+            let key = format!("{}/{}/orig", kind, id);
+            get_object_size(state, &key).await?
+        }
+    };
+
+    if size > state.mem_max_file_size {
+        Ok("/var/trn")
+    } else {
+        Ok("/tmp/trn")
+    }
 }
 
 async fn process_job_inner(state: &AppState, kind: &str, id: i16, work_dir: &str) -> Result<()> {
@@ -254,6 +287,27 @@ async fn object_exists(state: &AppState, key: &str) -> Result<bool> {
             }
             Err(e).context("Failed to check object existence")
         }
+    }
+}
+
+async fn get_object_size(state: &AppState, key: &str) -> Result<i64> {
+    let head = state
+        .s3
+        .head_object()
+        .bucket(&state.s3_bucket)
+        .key(key)
+        .send()
+        .await
+        .context("Failed to head object for size check")?;
+
+    Ok(head.content_length().unwrap_or(0))
+}
+
+fn work_dir_root(mem_max_bytes: i64, file_size: i64) -> &'static str {
+    if file_size > mem_max_bytes {
+        "/var/trn"
+    } else {
+        "/tmp/trn"
     }
 }
 
